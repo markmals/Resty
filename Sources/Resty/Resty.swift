@@ -110,14 +110,83 @@ extension API {
 
 //typealias Endpoint<Output> = AnyPublisher<Output, Error>
 
-public struct EndpointPublisher: Publisher {
+struct Request {
+    var accept: ContentType?
+    var contentType: ContentType?
+    var body: Data?
+    var headers: [String: String] = [:]
+    var expectedStatusCode: Range<Int> = 200..<300
+    var timeOutInterval: TimeInterval = 10
+    var queryItems: [String: String] = [:]
+}
+
+protocol EndpointPublisher: Publisher {
+    var nativeRequest: URLRequest { get }
+    
+    init(url: URL, request: Request)
+}
+
+struct GetPublisher: EndpointPublisher {
+    typealias Output = Data
+    typealias Failure = Error
+    
+    let upstream: DataPublisher
+    var nativeRequest: URLRequest { upstream.request }
+    
+    init(url: URL, request: Request) {
+        upstream = DataPublisher(method: .get, url: url, request: request)
+    }
+    
+    public func receive<S>(subscriber: S) where S : Subscriber, Error == S.Failure, Data == S.Input {
+        upstream.receive(subscriber: subscriber)
+    }
+}
+
+public struct DataPublisher: Publisher {
     public typealias Output = Data
     public typealias Failure = Error
     
     var request: URLRequest
     var expectedStatusCode: Range<Int>
     
-    public func receive<S>(subscriber: S) where S : Subscriber, Error == S.Failure, Output == S.Input {
+    init(method: Method, url: URL, request: Request) {
+        var requestURL: URL
+        
+        if request.queryItems.isEmpty {
+            requestURL = url
+        } else {
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
+            components.queryItems = components.queryItems ?? []
+            components.queryItems!.append(contentsOf: request.queryItems.map { URLQueryItem(name: $0.0, value: $0.1) })
+            requestURL = components.url!
+        }
+    
+        var req = URLRequest(url: requestURL)
+    
+        if let accept = request.accept {
+            req.setValue(accept.rawValue, forHTTPHeaderField: "Accept")
+        }
+    
+        if let contentType = request.contentType {
+            req.setValue(contentType.rawValue, forHTTPHeaderField: "Content-Type")
+        }
+    
+        for (key, value) in request.headers {
+            req.setValue(value, forHTTPHeaderField: key)
+        }
+    
+        req.timeoutInterval = request.timeOutInterval
+        req.httpMethod = method.rawValue
+
+        // body *needs* to be the last property that we set, because of this bug:
+        // https://bugs.swift.org/browse/SR-6687
+        req.httpBody = request.body
+        
+        self.request = req
+        self.expectedStatusCode = request.expectedStatusCode
+    }
+    
+    public func receive<S>(subscriber: S) where S : Subscriber, Error == S.Failure, Data == S.Input {
         URLSession.shared
             .dataTaskPublisher(for: request)
             .tryMap { (data: Data, response: URLResponse) -> Data in
@@ -151,53 +220,4 @@ public enum ContentType: String {
     case json = "application/json"
     case xml = "application/xml"
     case urlencoded = "application/x-www-form-urlencoded"
-}
-
-extension EndpointPublisher {
-    public init(
-        _ method: Method,
-        url: URL,
-        accept: ContentType?,
-        contentType: ContentType?,
-        body: Data?,
-        headers: [String: String] = [:],
-        expectedStatusCode: Range<Int>,
-        timeOutInterval: TimeInterval = 10,
-        queryItems: [String: String] = [:]
-    ) {
-        var requestURL: URL
-        
-        if queryItems.isEmpty {
-            requestURL = url
-        } else {
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
-            components.queryItems = components.queryItems ?? []
-            components.queryItems!.append(contentsOf: queryItems.map { URLQueryItem(name: $0.0, value: $0.1) })
-            requestURL = components.url!
-        }
-    
-        var request = URLRequest(url: requestURL)
-    
-        if let accept = accept {
-            request.setValue(accept.rawValue, forHTTPHeaderField: "Accept")
-        }
-    
-        if let contentType = contentType {
-            request.setValue(contentType.rawValue, forHTTPHeaderField: "Content-Type")
-        }
-    
-        for (key, value) in headers {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
-    
-        request.timeoutInterval = timeOutInterval
-        request.httpMethod = method.rawValue
-
-        // body *needs* to be the last property that we set, because of this bug:
-        // https://bugs.swift.org/browse/SR-6687
-        request.httpBody = body
-        
-        self.request = request
-        self.expectedStatusCode = expectedStatusCode
-    }
 }
