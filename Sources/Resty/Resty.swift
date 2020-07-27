@@ -1,114 +1,44 @@
 import Foundation
 import Combine
 
-struct Post: Codable {}
+extension URLSession.DataTaskPublisher {
+    func validate(with expectedStatusCode: Range<Int>) -> AnyPublisher<Data, Error> {
+        tryMap { (data: Data, response: URLResponse) -> Data in
+            guard let httpResponse = response as? HTTPURLResponse else {
+                // FIXME: Throw a better error
+                throw URLError(.unknown)
+            }
 
-struct Reddit: API {
-    let base = URL(string: "https://www.reddit.com")!
-    var apiKey = "**********"
-    var authHeader: [String: String] {
-        ["Authorization": "BEARER \(apiKey)"]
-    }
-    
-    func getHomePosts(for subreddits: [String]) -> AnyPublisher<[Post], Error> {
-        get("r/\(subreddits.joined(separator: "+"))/.json")
-    }
-    
-    func upload(content: Post) -> AnyPublisher<(), Error> {
-        Just(content)
-            .encode(encoder: JSONEncoder())
-            .flatMap { post("/some/postable/path", body: $0) }
-            .eraseToAnyPublisher()
-    }
-}
+            guard httpResponse.statusCode >= expectedStatusCode.min()! &&
+                    httpResponse.statusCode < expectedStatusCode.max()! else {
+                // FIXME: Throw a better error
+                throw URLError(.unknown)
+            }
 
-protocol API {
-    var base: URL { get }
-}
-
-extension API {
-    var authorizationHeader: [String: String] { [:] }
-    
-    private func merging(_ lhs: [String: String], _ rhs: [String: String]) -> [String: String] {
-        var merged = lhs
-        merged.merge(rhs) { (lhs, rhs) in return rhs }
-        return merged
-    }
-    
-    func get<Response: Decodable>(
-        _ path: String = "/",
-        accept: ContentType? = nil,
-        contentType: ContentType? = nil,
-        body: Data? = nil,
-        headers: [String: String] = [:],
-        expectedStatusCode: Range<Int> = 200..<300,
-        timeOutInterval: TimeInterval = 10,
-        queryItems: [String: String] = [:]
-    ) -> AnyPublisher<Response, Error> {
-        EndpointPublisher(.get,
-            url: base.appendingPathComponent(path),
-            accept: accept,
-            contentType: contentType,
-            body: body,
-            headers: merging(headers, authorizationHeader),
-            expectedStatusCode: expectedStatusCode,
-            timeOutInterval: timeOutInterval,
-            queryItems: queryItems
-        )
-        .decode(type: Response.self, decoder: JSONDecoder())
-        .eraseToAnyPublisher()
-    }
-    
-    func post(
-        _ path: String = "/",
-        accept: ContentType? = nil,
-        contentType: ContentType? = nil,
-        body: Data? = nil,
-        headers: [String: String] = [:],
-        expectedStatusCode: Range<Int> = 200..<300,
-        timeOutInterval: TimeInterval = 10,
-        queryItems: [String: String] = [:]
-    ) -> AnyPublisher<(), Error> {
-        EndpointPublisher(.post,
-            url: base.appendingPathComponent(path),
-            accept: accept,
-            contentType: contentType,
-            body: body,
-            headers: merging(headers, authorizationHeader),
-            expectedStatusCode: expectedStatusCode,
-            timeOutInterval: timeOutInterval,
-            queryItems: queryItems
-        )
-        .map { _ in }
-        .eraseToAnyPublisher()
-    }
-    
-    func post<Response: Decodable>(
-        _ path: String = "/",
-        accept: ContentType? = nil,
-        contentType: ContentType? = nil,
-        body: Data? = nil,
-        headers: [String: String] = [:],
-        expectedStatusCode: Range<Int> = 200..<300,
-        timeOutInterval: TimeInterval = 10,
-        queryItems: [String: String] = [:]
-    ) -> AnyPublisher<Response, Error> {
-        EndpointPublisher(.post,
-            url: base.appendingPathComponent(path),
-            accept: accept,
-            contentType: contentType,
-            body: body,
-            headers: merging(headers, authorizationHeader),
-            expectedStatusCode: expectedStatusCode,
-            timeOutInterval: timeOutInterval,
-            queryItems: queryItems
-        )
-        .decode(type: Response.self, decoder: JSONDecoder())
+            return data
+        }
+        .mapError { $0 as Error }
         .eraseToAnyPublisher()
     }
 }
 
-//typealias Endpoint<Output> = AnyPublisher<Output, Error>
+enum Method: String {
+    case get = "GET"
+    case post = "POST"
+    case put = "PUT"
+    case patch = "PATCH"
+    case delete = "DELETE"
+}
+
+/// An entity header used to indicate the media type of the resource.
+public enum ContentType: String {
+    /// The JSON content type.
+    case json = "application/json"
+    /// The XML content type.
+    case xml = "application/xml"
+    /// The Form Encoded content type.
+    case urlencoded = "application/x-www-form-urlencoded"
+}
 
 struct Request {
     var accept: ContentType?
@@ -120,36 +50,16 @@ struct Request {
     var queryItems: [String: String] = [:]
 }
 
-protocol EndpointPublisher: Publisher {
-    var nativeRequest: URLRequest { get }
-    
-    init(url: URL, request: Request)
-}
-
-struct GetPublisher: EndpointPublisher {
-    typealias Output = Data
-    typealias Failure = Error
-    
-    let upstream: DataPublisher
-    var nativeRequest: URLRequest { upstream.request }
-    
-    init(url: URL, request: Request) {
-        upstream = DataPublisher(method: .get, url: url, request: request)
-    }
-    
-    public func receive<S>(subscriber: S) where S : Subscriber, Error == S.Failure, Data == S.Input {
-        upstream.receive(subscriber: subscriber)
-    }
-}
-
-public struct DataPublisher: Publisher {
+/// A publisher that delivers the results of of a URL request.
+public struct RequestPublisher: Publisher {
     public typealias Output = Data
     public typealias Failure = Error
     
-    var request: URLRequest
-    var expectedStatusCode: Range<Int>
+    var method: Method
+    var url: URL
+    var request = Request()
     
-    init(method: Method, url: URL, request: Request) {
+    var nativeRequest: URLRequest {
         var requestURL: URL
         
         if request.queryItems.isEmpty {
@@ -157,7 +67,9 @@ public struct DataPublisher: Publisher {
         } else {
             var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
             components.queryItems = components.queryItems ?? []
-            components.queryItems!.append(contentsOf: request.queryItems.map { URLQueryItem(name: $0.0, value: $0.1) })
+            components.queryItems!.append(contentsOf: request.queryItems.map {
+                URLQueryItem(name: $0.0, value: $0.1)
+            })
             requestURL = components.url!
         }
     
@@ -178,46 +90,148 @@ public struct DataPublisher: Publisher {
         req.timeoutInterval = request.timeOutInterval
         req.httpMethod = method.rawValue
 
-        // body *needs* to be the last property that we set, because of this bug:
+        // The body *needs* to be the last property that we set, because of this bug:
         // https://bugs.swift.org/browse/SR-6687
         req.httpBody = request.body
         
-        self.request = req
-        self.expectedStatusCode = request.expectedStatusCode
+        return req
     }
     
     public func receive<S>(subscriber: S) where S : Subscriber, Error == S.Failure, Data == S.Input {
         URLSession.shared
-            .dataTaskPublisher(for: request)
-            .tryMap { (data: Data, response: URLResponse) -> Data in
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    // FIXME: Throw a better error
-                    throw URLError(.unknown)
-                }
-
-                guard httpResponse.statusCode >= expectedStatusCode.min()! &&
-                        httpResponse.statusCode < expectedStatusCode.max()! else {
-                    // FIXME: Throw a better error
-                    throw URLError(.unknown)
-                }
-
-                return data
-            }
-            .mapError { $0 as Error }
+            .dataTaskPublisher(for: nativeRequest)
+            .validate(with: request.expectedStatusCode)
             .receive(subscriber: subscriber)
     }
 }
 
-public enum Method: String {
-    case get = "GET"
-    case post = "POST"
-    case put = "PUT"
-    case patch = "PATCH"
-    case delete = "DELETE"
+extension RequestPublisher {
+    private func chain(modifying closure: (inout Request) -> Void) -> RequestPublisher {
+        var publisher = self
+        var req = request
+        closure(&req)
+        publisher.request = req
+        return publisher
+    }
+    
+    private func chain<Value>(
+        modifying keyPath: WritableKeyPath<Request, Value>,
+        with value: Value
+    ) -> RequestPublisher {
+        chain { $0[keyPath: keyPath] = value }
+    }
+    
+    private func chain(
+        merging keyPath: WritableKeyPath<Request, [String: String]>,
+        with dictionary: [String: String]
+    ) -> RequestPublisher {
+        // Override old dictionary values with new values
+        chain { $0[keyPath: keyPath].merge(dictionary) { _, rhs in return rhs } }
+    }
 }
 
-public enum ContentType: String {
-    case json = "application/json"
-    case xml = "application/xml"
-    case urlencoded = "application/x-www-form-urlencoded"
+extension RequestPublisher {
+    /// Adds the Accept content type to the request.
+    ///
+    /// This will override any previous `accept` modifiers.
+    public func accept(_ contentType: ContentType?) -> RequestPublisher {
+        chain(modifying: \.accept, with: contentType)
+    }
+    
+    /// Adds the Content-Type to the request.
+    ///
+    /// This will override any previous `contentType` modifiers.
+    public func contentType(_ contentType: ContentType?) -> RequestPublisher {
+        chain(modifying: \.contentType, with: contentType)
+    }
+    
+    /// Adds the body data to the request.
+    ///
+    /// This will override any previous `body` modifiers.
+    public func body(_ data: Data?) -> RequestPublisher {
+        chain(modifying: \.body, with: data)
+    }
+    
+    /// Encodes the `Encodable` instance and adds its body data to the request.
+    ///
+    /// This will override any previous `body` modifiers.
+    public func body<T: Encodable, E: TopLevelEncoder>(
+        _ object: T?,
+        encoder: E
+    ) -> RequestPublisher where E.Output == Data {
+        body(try? encoder.encode(object))
+    }
+    
+    /// Adds the headers to the request.
+    ///
+    /// This will override any previous `headers` modifiers using the same key.
+    public func headers(_ headers: [String: String]) -> RequestPublisher {
+        chain(modifying: \.headers, with: headers)
+    }
+    
+    /// Adds the authorization headers to the request.
+    ///
+    /// This will override any previous `headers` modifiers using the same key.
+    public func authorization(_ auth: [String: String]) -> RequestPublisher {
+        headers(auth)
+    }
+    
+    /// Adds the expected status code to the request.
+    ///
+    /// This will override any previous `expectedStatusCode` modifiers.
+    public func expectedStatusCode(_ range: Range<Int>) -> RequestPublisher {
+        chain(modifying: \.expectedStatusCode, with: range)
+    }
+    
+    /// Adds the time out interval to the request.
+    ///
+    /// This will override any previous `timeOutInterval` modifiers.
+    public func timeOutInterval(_ interval: TimeInterval) -> RequestPublisher {
+        chain(modifying: \.timeOutInterval, with: interval)
+    }
+    
+    /// Adds the query items to the request.
+    ///
+    /// This will override any previous `queryItems` modifiers using the same key.
+    public func queryItems(_ items: [String: String]) -> RequestPublisher {
+        chain(merging: \.queryItems, with: items)
+    }
+}
+
+public protocol API {
+    var baseURL: URL { get }
+}
+
+extension API {
+    private func publisher(_ method: Method, for path: String) -> RequestPublisher {
+        RequestPublisher(
+            method: method,
+            url: baseURL.appendingPathComponent(path)
+        )
+    }
+    
+    /// Returns a publisher that sends a GET request using the provided `path` and `baseURL` and outputs the response data
+    public func get(path: String) -> RequestPublisher {
+        publisher(.get, for: path)
+    }
+    
+    /// Returns a publisher that sends a POST request using the provided `path` and `baseURL` and outputs the response data
+    public func post(path: String) -> RequestPublisher {
+        publisher(.post, for: path)
+    }
+    
+    /// Returns a publisher that sends a PUT request using the provided `path` and `baseURL` and outputs the response data
+    public func put(path: String) -> RequestPublisher {
+        publisher(.put, for: path)
+    }
+    
+    /// Returns a publisher that sends a PATCH request using the provided `path` and `baseURL` and outputs the response data
+    public func patch(path: String) -> RequestPublisher {
+        publisher(.patch, for: path)
+    }
+    
+    /// Returns a publisher that sends a DELETE request using the provided `path` and `baseURL` and outputs the response data
+    public func delete(path: String) -> RequestPublisher {
+        publisher(.delete, for: path)
+    }
 }
