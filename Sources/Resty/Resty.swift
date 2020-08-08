@@ -44,7 +44,7 @@ public struct Request<Response: Decodable> {
     let method: Method
     let url: URL
     
-    let responseType: Response.Type
+    var responseType: Response.Type
     var decoder: JSONDecoder
     
     var accept: ContentType?
@@ -194,6 +194,13 @@ extension Request {
     /// This will override any previous `queryItems` modifiers using the same key.
     public func queryItems(_ items: [String: String]) -> Request {
         chain(merging: \.queryItems, with: items)
+    }
+    
+    /// Changes the response type of the request.
+    ///
+    /// This will override any previous `response` modifiers.
+    public func response(_ type: Response.Type) -> Request {
+        chain(modifying: \.responseType, with: type)
     }
 }
 
