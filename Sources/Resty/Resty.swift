@@ -55,6 +55,10 @@ public struct Request<Response: Decodable> {
     var timeOutInterval: TimeInterval = 10
     var queryItems: [String: String] = [:]
     
+    var shouldDecode: Bool {
+        responseType != Data.self
+    }
+    
     /// A publisher that delivers the results of of a URL request.
     public func publisher() -> AnyPublisher<Response, Error> {
         var requestURL: URL
@@ -95,10 +99,12 @@ public struct Request<Response: Decodable> {
             .dataTaskPublisher(for: nativeRequest)
             .validate(with: expectedStatusCode)
             .tryMap { data -> Response in
-                if responseType == Data.self {
-                    return data as! Response
-                } else {
+                if shouldDecode {
                     return try decoder.decode(Response.self, from: data)
+                } else {
+                    // `Response` is guarenteed to be `Data` here, but the compiler isn't yet smart
+                    // enough to recognize that, so we must force cast it
+                    return data as! Response
                 }
             }
             .eraseToAnyPublisher()
@@ -232,7 +238,7 @@ extension API {
     
     /// Returns a publisher that sends a GET request using the provided `path`, `baseURL`, and `decoder` and outputs the response object
     public func get<T: Decodable>(path: String) -> Request<T> {
-        publisher(.get, for: path)
+        publisher(.get, for: path).accept(.json)
     }
     
     /// Returns a publisher that sends a POST request using the provided `path` and `baseURL` and outputs the response data
@@ -242,7 +248,7 @@ extension API {
     
     /// Returns a publisher that sends a POST request using the provided `path` and `baseURL` and outputs the response data
     public func post<T: Decodable>(path: String) -> Request<T> {
-        publisher(.post, for: path)
+        publisher(.post, for: path).accept(.json)
     }
     
     /// Returns a publisher that sends a PUT request using the provided `path` and `baseURL` and outputs the response data
@@ -252,7 +258,7 @@ extension API {
     
     /// Returns a publisher that sends a PUT request using the provided `path` and `baseURL` and outputs the response data
     public func put<T: Decodable>(path: String) -> Request<T> {
-        publisher(.put, for: path)
+        publisher(.put, for: path).accept(.json)
     }
     
     /// Returns a publisher that sends a PATCH request using the provided `path` and `baseURL` and outputs the response data
@@ -262,7 +268,7 @@ extension API {
     
     /// Returns a publisher that sends a PATCH request using the provided `path` and `baseURL` and outputs the response data
     public func patch<T: Decodable>(path: String) -> Request<T> {
-        publisher(.patch, for: path)
+        publisher(.patch, for: path).accept(.json)
     }
     
     /// Returns a publisher that sends a DELETE request using the provided `path` and `baseURL` and outputs the response data
@@ -272,6 +278,6 @@ extension API {
     
     /// Returns a publisher that sends a DELETE request using the provided `path` and `baseURL` and outputs the response data
     public func delete<T: Decodable>(path: String) -> Request<T> {
-        publisher(.delete, for: path)
+        publisher(.delete, for: path).accept(.json)
     }
 }
