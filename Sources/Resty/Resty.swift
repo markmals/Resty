@@ -40,7 +40,13 @@ public enum ContentType: String {
     case urlencoded = "application/x-www-form-urlencoded"
 }
 
-struct Request {
+public struct Request<Response: Decodable> {
+    let method: Method
+    let url: URL
+    
+    let responseType: Response.Type
+    var decoder: JSONDecoder
+    
     var accept: ContentType?
     var contentType: ContentType?
     var body: Data?
@@ -48,107 +54,100 @@ struct Request {
     var expectedStatusCode: Range<Int> = 200..<300
     var timeOutInterval: TimeInterval = 10
     var queryItems: [String: String] = [:]
-}
-
-/// A publisher that delivers the results of of a URL request.
-public struct RequestPublisher: Publisher {
-    public typealias Output = Data
-    public typealias Failure = Error
     
-    var method: Method
-    var url: URL
-    var request = Request()
-    
-    var nativeRequest: URLRequest {
+    /// A publisher that delivers the results of of a URL request.
+    public func publisher() -> AnyPublisher<Response, Error> {
         var requestURL: URL
         
-        if request.queryItems.isEmpty {
+        if queryItems.isEmpty {
             requestURL = url
         } else {
             var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
             components.queryItems = components.queryItems ?? []
-            components.queryItems!.append(contentsOf: request.queryItems.map {
+            components.queryItems!.append(contentsOf: queryItems.map {
                 URLQueryItem(name: $0.0, value: $0.1)
             })
             requestURL = components.url!
         }
     
-        var req = URLRequest(url: requestURL)
+        var nativeRequest = URLRequest(url: requestURL)
     
-        if let accept = request.accept {
-            req.setValue(accept.rawValue, forHTTPHeaderField: "Accept")
+        if let accept = accept {
+            nativeRequest.setValue(accept.rawValue, forHTTPHeaderField: "Accept")
         }
     
-        if let contentType = request.contentType {
-            req.setValue(contentType.rawValue, forHTTPHeaderField: "Content-Type")
+        if let contentType = contentType {
+            nativeRequest.setValue(contentType.rawValue, forHTTPHeaderField: "Content-Type")
         }
     
-        for (key, value) in request.headers {
-            req.setValue(value, forHTTPHeaderField: key)
+        for (key, value) in headers {
+            nativeRequest.setValue(value, forHTTPHeaderField: key)
         }
     
-        req.timeoutInterval = request.timeOutInterval
-        req.httpMethod = method.rawValue
+        nativeRequest.timeoutInterval = timeOutInterval
+        nativeRequest.httpMethod = method.rawValue
 
         // The body *needs* to be the last property that we set, because of this bug:
         // https://bugs.swift.org/browse/SR-6687
-        req.httpBody = request.body
+        nativeRequest.httpBody = body
         
-        return req
-    }
-    
-    public func receive<S>(subscriber: S) where S : Subscriber, Error == S.Failure, Data == S.Input {
-        URLSession.shared
+        return URLSession.shared
             .dataTaskPublisher(for: nativeRequest)
-            .validate(with: request.expectedStatusCode)
-            .receive(subscriber: subscriber)
+            .validate(with: expectedStatusCode)
+            .tryMap { data -> Response in
+                if responseType == Data.self {
+                    return data as! Response
+                } else {
+                    return try decoder.decode(Response.self, from: data)
+                }
+            }
+            .eraseToAnyPublisher()
     }
 }
 
-extension RequestPublisher {
-    private func chain(modifying closure: (inout Request) -> Void) -> RequestPublisher {
-        var publisher = self
-        var req = request
-        closure(&req)
-        publisher.request = req
-        return publisher
+
+extension Request {
+    private func chain(modifying closure: (inout Request) -> Void) -> Request {
+        var request = self
+        closure(&request)
+        return request
     }
     
     private func chain<Value>(
         modifying keyPath: WritableKeyPath<Request, Value>,
         with value: Value
-    ) -> RequestPublisher {
+    ) -> Request {
         chain { $0[keyPath: keyPath] = value }
     }
     
     private func chain(
         merging keyPath: WritableKeyPath<Request, [String: String]>,
         with dictionary: [String: String]
-    ) -> RequestPublisher {
+    ) -> Request {
         // Override old dictionary values with new values
         chain { $0[keyPath: keyPath].merge(dictionary) { _, rhs in return rhs } }
     }
 }
 
-extension RequestPublisher {
+extension Request {
     /// Adds the Accept content type to the request.
     ///
     /// This will override any previous `accept` modifiers.
-    public func accept(_ contentType: ContentType?) -> RequestPublisher {
+    public func accept(_ contentType: ContentType?) -> Request {
         chain(modifying: \.accept, with: contentType)
     }
     
     /// Adds the Content-Type to the request.
     ///
     /// This will override any previous `contentType` modifiers.
-    public func contentType(_ contentType: ContentType?) -> RequestPublisher {
+    public func contentType(_ contentType: ContentType?) -> Request {
         chain(modifying: \.contentType, with: contentType)
     }
     
     /// Adds the body data to the request.
     ///
     /// This will override any previous `body` modifiers.
-    public func body(_ data: Data?) -> RequestPublisher {
+    public func body(_ data: Data?) -> Request {
         chain(modifying: \.body, with: data)
     }
     
@@ -158,80 +157,114 @@ extension RequestPublisher {
     public func body<T: Encodable, E: TopLevelEncoder>(
         _ object: T?,
         encoder: E
-    ) -> RequestPublisher where E.Output == Data {
+    ) -> Request where E.Output == Data {
         body(try? encoder.encode(object))
     }
     
     /// Adds the headers to the request.
     ///
     /// This will override any previous `headers` modifiers using the same key.
-    public func headers(_ headers: [String: String]) -> RequestPublisher {
+    public func headers(_ headers: [String: String]) -> Request {
         chain(modifying: \.headers, with: headers)
     }
     
     /// Adds the authorization headers to the request.
     ///
     /// This will override any previous `headers` modifiers using the same key.
-    public func authorization(_ auth: [String: String]) -> RequestPublisher {
+    public func authorization(_ auth: [String: String]) -> Request {
         headers(auth)
     }
     
     /// Adds the expected status code to the request.
     ///
     /// This will override any previous `expectedStatusCode` modifiers.
-    public func expectedStatusCode(_ range: Range<Int>) -> RequestPublisher {
+    public func expectedStatusCode(_ range: Range<Int>) -> Request {
         chain(modifying: \.expectedStatusCode, with: range)
     }
     
     /// Adds the time out interval to the request.
     ///
     /// This will override any previous `timeOutInterval` modifiers.
-    public func timeOutInterval(_ interval: TimeInterval) -> RequestPublisher {
+    public func timeOutInterval(_ interval: TimeInterval) -> Request {
         chain(modifying: \.timeOutInterval, with: interval)
     }
     
     /// Adds the query items to the request.
     ///
     /// This will override any previous `queryItems` modifiers using the same key.
-    public func queryItems(_ items: [String: String]) -> RequestPublisher {
+    public func queryItems(_ items: [String: String]) -> Request {
         chain(merging: \.queryItems, with: items)
     }
 }
 
 public protocol API {
     var baseURL: URL { get }
+    var decoder: JSONDecoder { get }
+    var encoder: JSONEncoder { get }
 }
 
 extension API {
-    private func publisher(_ method: Method, for path: String) -> RequestPublisher {
-        RequestPublisher(
+    var decoder: JSONDecoder { JSONDecoder() }
+    var encoder: JSONEncoder { JSONEncoder() }
+}
+
+extension API {
+    private func publisher<T: Decodable>(_ method: Method, for path: String) -> Request<T> {
+        Request(
             method: method,
-            url: baseURL.appendingPathComponent(path)
+            url: baseURL.appendingPathComponent(path),
+            responseType: T.self,
+            decoder: decoder
         )
     }
     
     /// Returns a publisher that sends a GET request using the provided `path` and `baseURL` and outputs the response data
-    public func get(path: String) -> RequestPublisher {
+    public func get(path: String) -> Request<Data> {
+        publisher(.get, for: path)
+    }
+    
+    /// Returns a publisher that sends a GET request using the provided `path`, `baseURL`, and `decoder` and outputs the response object
+    public func get<T: Decodable>(path: String) -> Request<T> {
         publisher(.get, for: path)
     }
     
     /// Returns a publisher that sends a POST request using the provided `path` and `baseURL` and outputs the response data
-    public func post(path: String) -> RequestPublisher {
+    public func post(path: String) -> Request<Data> {
+        publisher(.post, for: path)
+    }
+    
+    /// Returns a publisher that sends a POST request using the provided `path` and `baseURL` and outputs the response data
+    public func post<T: Decodable>(path: String) -> Request<T> {
         publisher(.post, for: path)
     }
     
     /// Returns a publisher that sends a PUT request using the provided `path` and `baseURL` and outputs the response data
-    public func put(path: String) -> RequestPublisher {
+    public func put(path: String) -> Request<Data> {
+        publisher(.put, for: path)
+    }
+    
+    /// Returns a publisher that sends a PUT request using the provided `path` and `baseURL` and outputs the response data
+    public func put<T: Decodable>(path: String) -> Request<T> {
         publisher(.put, for: path)
     }
     
     /// Returns a publisher that sends a PATCH request using the provided `path` and `baseURL` and outputs the response data
-    public func patch(path: String) -> RequestPublisher {
+    public func patch(path: String) -> Request<Data> {
+        publisher(.patch, for: path)
+    }
+    
+    /// Returns a publisher that sends a PATCH request using the provided `path` and `baseURL` and outputs the response data
+    public func patch<T: Decodable>(path: String) -> Request<T> {
         publisher(.patch, for: path)
     }
     
     /// Returns a publisher that sends a DELETE request using the provided `path` and `baseURL` and outputs the response data
-    public func delete(path: String) -> RequestPublisher {
+    public func delete(path: String) -> Request<Data> {
+        publisher(.delete, for: path)
+    }
+    
+    /// Returns a publisher that sends a DELETE request using the provided `path` and `baseURL` and outputs the response data
+    public func delete<T: Decodable>(path: String) -> Request<T> {
         publisher(.delete, for: path)
     }
 }
