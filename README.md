@@ -4,7 +4,7 @@ Resty is a networking μframework built on Apple's [`Combine`](https://developer
 
 ## Wrapping an API
 
-To wrap an API, conform to the `API` protocol, add the `baseURL` for your service, and write `Publisher` returning functions. Conforming to the `API` protocol gives you access to the five HTTP verb methods (`get(path:)`, `post(path:)`, `put(path:)`, `patch(path:)`, `delete(path:)`), to which you can declaratively add request options and use all the other functional declarative operators that come with [`Publisher`](https://developer.apple.com/documentation/combine/publisher).
+To wrap an API, conform to the `API` protocol, add the `baseURL` for your service, and write `Publisher` returning functions. Conforming to the `API` protocol gives you access to the five HTTP verb methods (`get(path:)`, `post(path:)`, `put(path:)`, `patch(path:)`, `delete(path:)`), to which you can declaratively add request options and get a publisher from, on which you can use all the functional declarative operators that come with [`Publisher`](https://developer.apple.com/documentation/combine/publisher).
 
 ```swift
 import Resty
@@ -27,7 +27,7 @@ struct Mailchimp: API {
         return put(path: "campaigns/\(campaignID)/content")
             .body(body, encoder: JSONEncoder())
             .authorization(authHeader)
-            .eraseToAnyPublisher()
+            .publisher()
     }
 }
 ```
