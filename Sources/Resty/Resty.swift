@@ -99,8 +99,8 @@ public struct Request<Response: Decodable> {
             .dataTaskPublisher(for: nativeRequest)
             .validate(with: expectedStatusCode)
             .tryMap { data -> Response in
-                if shouldDecode {
-                    return try decoder.decode(Response.self, from: data)
+                if self.shouldDecode {
+                    return try self.decoder.decode(Response.self, from: data)
                 } else {
                     // `Response` is guarenteed to be `Data` here, but the compiler isn't yet smart
                     // enough to recognize that, so we must force cast it
@@ -205,8 +205,13 @@ extension Request {
     /// Changes the response type of the request.
     ///
     /// This will override any previous `response` modifiers.
-    public func response(_ type: Response.Type) -> Request {
-        chain(modifying: \.responseType, with: type)
+    public func response<T: Decodable>(_ type: T) -> Request<T> {
+        Request<T>(
+            method: method,
+            url: url,
+            responseType: T.self,
+            decoder: decoder
+        )
     }
 }
 
