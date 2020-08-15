@@ -205,11 +205,11 @@ extension Request {
     /// Changes the response type of the request.
     ///
     /// This will override any previous `response` modifiers.
-    public func response<T: Decodable>(_ type: T) -> Request<T> {
+    public func response<T: Decodable>(_ type: T.Type) -> Request<T> {
         Request<T>(
             method: method,
             url: url,
-            responseType: T.self,
+            responseType: type,
             decoder: decoder
         )
     }
