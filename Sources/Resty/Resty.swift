@@ -204,7 +204,7 @@ extension Request {
     
     /// Changes the response type of the request.
     ///
-    /// This will override any previous `response` modifiers.
+    /// Due to the way generic types are constructed, this will override any previous modifiers.
     public func response<T: Decodable>(_ type: T.Type) -> Request<T> {
         Request<T>(
             method: method,
@@ -212,6 +212,7 @@ extension Request {
             responseType: type,
             decoder: decoder
         )
+        .accept(.json)
     }
 }
 
