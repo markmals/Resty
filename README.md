@@ -9,25 +9,30 @@ To wrap an API, conform to the `API` protocol, add the `baseURL` for your servic
 ```swift
 import Resty
 
-struct Mailchimp: API {
-    let baseURL = URL(string: "https://us7.api.mailchimp.com/3.0/")!
-    var apiKey = env.mailchimpApiKey
-    var authHeader: [String: String] { 
-        ["Authorization": "Basic " + "anystring:\(apiKey)".base64Encoded] 
-    }
-
-    func addContent(for episode: Episode, toCampaign campaignID: String) -> AnyPublisher<Void, Error> {
-        struct Edit: Encodable {
-            var plain_text: String
-            var html: String
-        }
-
-        let body = Edit(plain_text: plainText(episode), html: html(episode))
-        
-        return put(path: "campaigns/\(campaignID)/content")
-            .body(body, encoder: JSONEncoder())
-            .authorization(authHeader)
+struct SwiftForums: API {
+    let baseURL = URL(string: "https://forums.swift.org")!
+    lazy var decoder: JSONDecoder = {
+        var decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }()
+    
+    func search(term: String, includeBlurbs blurbs: Bool = false) -> AnyPublisher<SearchResult, Error> {
+        get(path: "/search")
+            .queryItems(["q": term, "include_blurbs": "\(blurbs)"])
             .publisher()
+    }
+    
+    func latestPosts() -> AnyPublisher<[LatestPost], Error> {
+        struct LatestPosts: Decodable {
+            let latestPosts: [LatestPost]
+        }
+        
+        return get(path: "/posts.json")
+            .publisher()
+            .decode(type: LatestPosts.self, decoder: decoder)
+            .map(\.latestPosts)
+            .eraseToAnyPublisher()
     }
 }
 ```
