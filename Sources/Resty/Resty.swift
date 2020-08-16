@@ -22,7 +22,7 @@ extension URLSession.DataTaskPublisher {
     }
 }
 
-enum Method: String {
+public enum Method: String {
     case get = "GET"
     case post = "POST"
     case put = "PUT"
@@ -244,7 +244,7 @@ extension API {
         )
     }
     
-    public func request<T: Decodable, Decoder: TopLevelDecoder>(_ method: Method, url: URL, decoder: Decoder) -> Request<T> {
+    public func request<T: Decodable>(_ method: Method, url: URL, decoder: JSONDecoder) -> Request<T> {
         Request(
             method: method,
             url: url,
