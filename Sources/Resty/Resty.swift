@@ -235,6 +235,28 @@ extension API {
         )
     }
     
+    public func request(_ method: Method, url: URL) -> Request<Data> {
+        Request(
+            method: method,
+            url: url,
+            responseType: Data.self,
+            decoder: decoder
+        )
+    }
+    
+    public func request<T: Decodable, Decoder: TopLevelDecoder>(_ method: Method, url: URL, decoder: Decoder) -> Request<T> {
+        Request(
+            method: method,
+            url: url,
+            responseType: T.self,
+            decoder: decoder
+        )
+    }
+    
+    public func request<T: Decodable>(_ method: Method, url: URL) -> Request<T> {
+        request(method, url: url, decoder: decoder)
+    }
+    
     /// Returns a publisher that sends a GET request using the provided `path` and `baseURL` and outputs the response data
     public func get(path: String) -> Request<Data> {
         publisher(.get, for: path)
