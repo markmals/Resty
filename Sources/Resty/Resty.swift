@@ -220,7 +220,7 @@ public protocol API {
     var baseURL: URL { get }
 }
 
-extension API {
+public extension API {
     var decoder: JSONDecoder { JSONDecoder() }
     var encoder: JSONEncoder { JSONEncoder() }
 }
