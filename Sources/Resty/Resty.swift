@@ -218,6 +218,8 @@ extension Request {
 
 public protocol API {
     var baseURL: URL { get }
+    var decoder: JSONDecoder { get }
+    var encoder: JSONEncoder { get }
 }
 
 public extension API {
